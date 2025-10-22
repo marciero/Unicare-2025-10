@@ -1,6 +1,6 @@
 ---
 title: "Power analysis; inflated admissions counts models"
-data: "June 2025"
+date: "`r Sys.Date()`"
 format: 
   html: 
     embed-resources: true
@@ -12,8 +12,9 @@ editor_options:
 
 We use a simulations based approach, which offers several advantages, not the least of which is that closed form expressions for these models are not tractable. They also require assumptions on the data that may not apply.
 
-- Simulations using zero inflated models as a generating process. These were validated based on analysis as summarized in `mod_summary_2025-06-03` and `zer0_infl_admissions_models_2025-05_short`. 
-- We use parameters obtained from the zero inflated Poisson (ZIP) and zero inflated negative binomial (ZINB) models found in `mod_summary_2025-06-03`; for example, the zero inflated Poisson model we use the model specification:
+- Simulations using zero inflated models as a generating process. These were validated based on analysis as summarized in `mod_summary_2025-010` and `zer0_infl_admissions_models_short_2025-10`. 
+- We use parameters obtained from the zero inflated Poisson (ZIP) and zero inflated negative binomial (ZINB) models found in `mod_summary_2025-06-03`; that is, from the preliminary data of June 2025. 
+- For the zero inflated Poisson model we use the model specification below. The negative binomial model is similar, with an estimated (not modelled) dispersion parameter
 
 $$
 \begin{aligned}
@@ -32,7 +33,7 @@ $$
 
 for interpretability and for numerical stability.
 
-As seen in `mod_summary_2025-06-03`, these seem to reasonable approximations of the generating process. We proceed as follows
+As seen in `mod_summary_2025-06-03`, and confirmed by analysis in 2025-10 documents, these seem to reasonable approximations of the generating process. We proceed as follows
 
 - Select a generating process- either zero inflated poisson or negative binomial, with parameters as found in model fits in `mod_summary_2025-06-03`
 - Generate the data. For each $n = 100, 200, ..., 1500$, and for each effect size on the mean for admissions $0.1, 0.2, ..., 0.7$:
@@ -48,9 +49,9 @@ We repeated this exercise mixing up whether the generating process was ZIP or ZI
 #### Effects sizes
 
 
-**`mean`**: Percent reduction of the mean in admissions counts for `ibis`
+**`mean`**: Reduction of the mean in admissions counts for `ibis`, as decimal.
 
-**`zero prob`**: Percent increase in the probability of zero admissions for `ibis`. For this effect, the patient is 60 years old and has both `chd` and `atrial_fibrillation`.
+**`zero prob`**: Percent increase in the probability of zero admissions for `ibis`, as a decimal. For this effect, the patient is assumed 60 years old and has both `chd` and `atrial_fibrillation`.
 
 ### Graphical results
 
@@ -74,6 +75,7 @@ knitr::opts_chunk$set(
 ```{r echo=FALSE, warning=FALSE, include=FALSE}
 
 library(tidyverse)
+library(kableExtra)
 
 ```
 
@@ -170,3 +172,18 @@ sim_results_pois_pois %>%
 
 
 ```
+
+
+Here are the tabulated results from that last scenario
+
+```{r}
+sim_results_pois_pois %>%
+  mutate(eff_size_zero_raw = (c1 + (1 - c1) * exp(-exp(lambda_ibis + c2))) /
+           (c1 + (1 - c1) * exp(-exp(c2))),
+         eff_size_zero = round(eff_size_zero_raw - 1, 3)) %>% 
+  select(n, eff_size, eff_size_zero) %>% 
+   kbl() %>% 
+  kable_classic(full_width = F, html_font = "Arial", font_size = 14)
+
+```
+
