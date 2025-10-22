@@ -20,7 +20,9 @@ editor_options:
 
 - On the other hand the same coefficients value gives statistical significance for the 10-20% percent increase in the probability of zero admissions for `ibis` cohort, depending on values of covariates. (We checked 60 year old with both `chf` and `afib`, and 60 year old with neither). 
 
-- Future work will include analysis of which covariates affect which portions of the model. For example, it appears that `chf` does significantly affect the zero inflation portion of the models. 
+- Our results about significance and effect sizes appear consistent with power analysis. One caveat is the heavy cohort imbalance, resulting from the use of all of the non Unicare-Study members as proxy for the control group. On the other hand we note that the non members appear to be healthier; for example with a large number with no chronic conditions.
+
+- Future work will focus solely on the Unicare-Study as members, and will include analysis of which covariates affect which portions of the model. For example, it appears that `chf` does significantly affect the zero inflation portion of the models. 
 
 
 ## Models
