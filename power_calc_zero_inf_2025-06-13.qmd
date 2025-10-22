@@ -1,0 +1,172 @@
+---
+title: "Power analysis; inflated admissions counts models"
+data: "June 2025"
+format: 
+  html: 
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+## Simulations
+
+We use a simulations based approach, which offers several advantages, not the least of which is that closed form expressions for these models are not tractable. They also require assumptions on the data that may not apply.
+
+- Simulations using zero inflated models as a generating process. These were validated based on analysis as summarized in `mod_summary_2025-06-03` and `zer0_infl_admissions_models_2025-05_short`. 
+- We use parameters obtained from the zero inflated Poisson (ZIP) and zero inflated negative binomial (ZINB) models found in `mod_summary_2025-06-03`; for example, the zero inflated Poisson model we use the model specification:
+
+$$
+\begin{aligned}
+\textrm{counts}_i & \sim ZIP(\pi_i, \mu_i) \\
+\log \mu_i & = \beta_0 + \beta_1 \textrm{cohort}_i + \beta_2\textrm{chf}_i + \beta_3\textrm{age}_i + \beta_4\textrm{atrialfibrillation}_i\\
+\log \frac{\pi_i}{1 - \pi_i} & = \gamma_0 + \gamma_1\textrm{age}_i \\
+\end{aligned}
+$$
+
+
+With scaled the age variable as 
+
+$$
+age \rightarrow \frac{\textrm{age} - 60}{10}
+$$ 
+
+for interpretability and for numerical stability.
+
+As seen in `mod_summary_2025-06-03`, these seem to reasonable approximations of the generating process. We proceed as follows
+
+- Select a generating process- either zero inflated poisson or negative binomial, with parameters as found in model fits in `mod_summary_2025-06-03`
+- Generate the data. For each $n = 100, 200, ..., 1500$, and for each effect size on the mean for admissions $0.1, 0.2, ..., 0.7$:
+   - Generate random binomial cohort assignment
+   - Generate random binomial chronic conditions, with covariances as found in the data
+   - Calculate the value of $\beta_1$, that gives the desired effect size.
+   - Generate a random outcome using the ZIP model above (or similar ZINB) for each observation.
+   - Fit a ZIP or ZINB model, record the p-value for the $\beta_1$ estimat
+   - Repeat the above 2000 times and count the proportion of times the p-value is less than 0.05.
+  
+We repeated this exercise mixing up whether the generating process was ZIP or ZINB, and whether the model that was fit was ZIP or ZINB. This serves as partial sensitivity analysis and way to assess robustness to model mis specification.
+
+#### Effects sizes
+
+
+**`mean`**: Percent reduction of the mean in admissions counts for `ibis`
+
+**`zero prob`**: Percent increase in the probability of zero admissions for `ibis`. For this effect, the patient is 60 years old and has both `chd` and `atrial_fibrillation`.
+
+### Graphical results
+
+
+```{r knitr, warning=FALSE, include=FALSE}
+options(htmltools.dir.version = FALSE, digits = 3)
+knitr::opts_chunk$set(
+  fig.width=7.5, fig.height=4.2, fig.retina=3,
+  out.width = "100%",
+  cache = FALSE,
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.show = TRUE,
+  hiline = TRUE,
+  require("knitr")
+)
+
+```
+
+```{r echo=FALSE, warning=FALSE, include=FALSE}
+
+library(tidyverse)
+
+```
+
+
+#### ZINB data generation and model fits
+
+```{r}
+
+load( "../data/power_curve_sims.RData")
+
+eff_size <- data.frame(eff_size = c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7)) %>%
+  mutate(lambda_ibis = log(1 - eff_size))
+
+invlogit <- function(x){exp(x)/(1+exp(x))}
+
+c2 <- 0.46 + 0.43
+c1 <- invlogit(1.35)
+
+sim_results_negbin_negbin %>%
+  mutate(eff_size_zero_raw = (c1 + (1 - c1) * exp(-exp(lambda_ibis + c2))) /
+           (c1 + (1 - c1) * exp(-exp(c2))),
+         eff_size_zero = round(eff_size_zero_raw - 1, 3),
+         eff_size_label = paste0("mean: ", eff_size, "\nzero prob: ", eff_size_zero)) %>%
+  ggplot(aes(x = n, y = prop_sig, color = eff_size_label, group = eff_size_label)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Power Curve by Effect Size",
+       x = "Sample Size", y = "Power",
+       color = "Effect Sizes") +
+  theme_minimal()
+
+
+```
+
+
+
+#### ZINB data generation and ZIP model fits
+
+```{r}
+
+load( "../data/power_curve_sims.RData")
+
+eff_size <- data.frame(eff_size = c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7)) %>%
+  mutate(lambda_ibis = log(1 - eff_size))
+
+invlogit <- function(x){exp(x)/(1+exp(x))}
+
+c2 <- 0.46 + 0.43
+c1 <- invlogit(1.35)
+
+sim_results_negbin_pois %>%
+  mutate(eff_size_zero_raw = (c1 + (1 - c1) * exp(-exp(lambda_ibis + c2))) /
+           (c1 + (1 - c1) * exp(-exp(c2))),
+         eff_size_zero = round(eff_size_zero_raw - 1, 3),
+         eff_size_label = paste0("mean: ", eff_size, "\nzero prob: ", eff_size_zero)) %>%
+  ggplot(aes(x = n, y = prop_sig, color = eff_size_label, group = eff_size_label)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Power Curve by Effect Size",
+       x = "Sample Size", y = "Power",
+       color = "Effect Sizes") +
+  theme_minimal()
+
+
+```
+
+
+#### ZIP data generation and model fits
+
+```{r}
+
+load( "../data/power_curve_sims.RData")
+
+eff_size <- data.frame(eff_size = c(0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7)) %>%
+  mutate(lambda_ibis = log(1 - eff_size))
+
+invlogit <- function(x){exp(x)/(1+exp(x))}
+
+c2 <- 0.46 + 0.43
+c1 <- invlogit(1.35)
+
+sim_results_pois_pois %>%
+  mutate(eff_size_zero_raw = (c1 + (1 - c1) * exp(-exp(lambda_ibis + c2))) /
+           (c1 + (1 - c1) * exp(-exp(c2))),
+         eff_size_zero = round(eff_size_zero_raw - 1, 3),
+         eff_size_label = paste0("mean: ", eff_size, "\nzero prob: ", eff_size_zero)) %>%
+  ggplot(aes(x = n, y = prop_sig, color = eff_size_label, group = eff_size_label)) +
+  geom_line() +
+  geom_point() +
+  labs(title = "Power Curve by Effect Size",
+       x = "Sample Size", y = "Power",
+       color = "Effect Sizes") +
+  theme_minimal()
+
+
+```

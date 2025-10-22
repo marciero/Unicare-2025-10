@@ -1,0 +1,188 @@
+---
+title: "Unicare - Study vs all others, pre vs during Ibis"
+subtitle: "Preliminary analysis of inpatient admissions"
+date: "May 2025"
+format: html
+editor_options:
+  chunk_output_type: console
+---
+
+```{r knitr, warning=FALSE, include=FALSE}
+options(htmltools.dir.version = FALSE, digits = 2)
+knitr::opts_chunk$set(
+  fig.width=7.5, fig.height=4.2, fig.retina=3,
+  out.width = "100%",
+  cache = FALSE,
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.show = TRUE,
+  hiline = TRUE,
+  require("knitr")
+)
+
+```
+
+```{r, echo=FALSE, warning=FALSE, include=FALSE}
+
+library(tidyverse)
+
+library(lubridate)
+
+library(broom)
+library(pscl)
+
+
+
+```
+
+
+```{r}
+event_file <- "../data/2025_05_12_utilization_events.csv"
+report_file <- "../data/2025_05_12_utilization_report.csv"
+
+source("read_clean.R")
+```
+
+
+
+```{r echo = FALSE}
+
+term <- 180
+
+ibis_inpatient_table <- events_full %>%  filter(org_name == "Unicare - Study")  %>%
+    filter(event_type == "inpatient", event_start_date > ibis_coverage_start_date & 
+           event_start_date < ibis_coverage_end_date) %>%
+    filter(term !=0 & event_start_date < ibis_coverage_start_date + term |
+              term == 0 & event_start_date > ibis_coverage_start_date) %>%
+   summarize(.by = pid, inpatient_count = n()) %>% 
+    mutate(cohort = "ibis")
+
+pre_ibis_inpatient_table <- events_full %>%  filter(org_name != "Unicare - Study")  %>%
+    filter(event_type == "inpatient", event_start_date < ibis_coverage_start_date &
+           event_start_date > coverage_start_date) %>% 
+    filter(term !=0 & event_start_date > ibis_coverage_start_date - term |
+            term == 0 & event_start_date < ibis_coverage_start_date) %>%
+    summarize(.by = pid, inpatient_count = n()) %>% 
+    mutate(cohort = "pre_ibis")
+
+
+```
+
+
+
+We set term equal to `r term` days, only considering inpatient events that occurred within this time period either side of `ibis_coverage_start_date`.
+
+```{r}
+inpatient_table <- pre_ibis_inpatient_table %>% 
+  bind_rows(ibis_inpatient_table)
+    
+```
+
+
+```{r}
+ibis_coverage_table <- report_full %>% filter(org_name == "Unicare - Study") %>% 
+    filter(ibis_coverage_end_date - ibis_coverage_start_date > term) %>% 
+    select(pid) %>% mutate(cohort = "ibis")
+    
+    pre_ibis_coverage_table <- report_full %>% filter(org_name != "Unicare - Study") %>% 
+    filter(ibis_coverage_start_date - coverage_start_date > term) %>% 
+    select(pid) %>% mutate(cohort = "pre_ibis")
+    
+    coverage_table <- bind_rows(ibis_coverage_table, pre_ibis_coverage_table)
+```
+
+```{r}
+inpatient_coverage_table <- coverage_table %>% left_join(inpatient_table, by = c("pid", "cohort")) %>%  replace(is.na(.), 0) %>% mutate(admit = if_else(inpatient_count == 0, 0, 1)) 
+```
+
+#### Inpatient admissions counts by cohort
+
+```{r}
+inpatient_coverage_table %>% 
+  group_by(cohort, inpatient_count) %>% 
+  summarize(member_count = n()) %>% 
+    mutate(prevalence = member_count/sum(member_count)) %>% knitr::kable()
+```
+
+
+#### Rate of admission
+```{r}
+inpatient_coverage_table %>% 
+  group_by(cohort) %>% 
+  summarize(admit = sum(admit), n = n()) %>% 
+  mutate(rate = admit / n) 
+```
+
+
+#### Proportion test for admits yes/no
+
+```{r}
+admit_table <- inpatient_coverage_table %>% 
+    select(cohort, admit) %>% table()
+
+prop.test(admit_table[,2], c(sum(admit_table[1,]), sum(admit_table[2, ])))
+
+```
+
+#### Should be same as logistic regression on cohort
+
+```{r}
+mod0 <- glm(admit ~ cohort, data = inpatient_coverage_table, family = "binomial")
+tidy(mod0)
+```
+
+So this amounts to `r exp(coef(mod)[2])` times the odds of admits in the pre-ibis cohort.
+
+#### Add covariates
+
+
+```{r}
+
+patients <- report_full %>% select(pid, age, c(condition_count:urologic_cancer))  %>% 
+    filter(pid %in% inpatient_coverage_table$pid)
+
+patients_events <- inpatient_coverage_table %>% inner_join(patients, by = "pid") 
+```
+
+
+```{r}
+mod1 <- glm(admit ~ ., data = patients_events %>% select(-c(pid, inpatient_count)), family = "binomial")
+tidy(mod1) 
+
+```
+
+
+#### Poisson regression on counts
+
+```{r}
+mod2 <- glm(inpatient_count ~ cohort, data = inpatient_coverage_table, family = "poisson")
+tidy(mod2)
+```
+
+So this amounts to `r exp(coef(mod2)[2])` times the mean rate of admits in the pre-ibis cohort.
+
+#### Zero inflated poisson regression
+
+```{r}
+mod3 <- zeroinfl(inpatient_count ~ cohort | 1, data = inpatient_coverage_table, dist = "poisson")
+summary(mod3)
+```
+
+#### Condition on age, chronic conditions
+
+"standard" Poisson 
+
+```{r}
+mod4 <- glm(inpatient_count ~ ., data = patients_events %>% select(-c(pid, admit)), family = "poisson")
+tidy(mod4)
+```
+
+
+ Zero inflated Poisson
+```{r}
+mod5 <- zeroinfl(inpatient_count ~ . | 1, data = patients_events %>% 
+                     select(-c(pid, admit, urologic_cancer)), dist = "poisson")
+summary(mod5)
+```
+

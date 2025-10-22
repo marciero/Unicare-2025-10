@@ -1,0 +1,488 @@
+---
+title: "Unicare zero inflated admissions counts models summary"
+date: "`r Sys.Date()`"
+format: 
+  html:
+    embed-resources: true
+editor_options: 
+  chunk_output_type: console
+---
+
+## Summary remarks
+
+- We compare inpatient admissions for Unicare - Study vs all the other members. 
+- 270 window for inpatient admissions.
+- The difference in mean admissions is more that 50% reduced for the  ibis vs control. This is borne out by the models as well. 
+- The zero inflated models appear to be a good approximation of the data generating process.
+- The various models are in agreement as to the effect of ibis. 
+- Based on our analysis (See also Zero inflated Models for Inpatient Admissions) we used both frequentist and Bayesian approaches for zero inflated Poisson and negative binomial models, with  `age`, `chf`, and `afib` covariates, in addition to the `cohort` indicator for ibis treatment or not. Covariates were selected based on correlations and other considerations. The inclusion of these can reduce the variance of estimates, even for a randomized control study where there is complete balance across cohorts. Interestingly, with the most recent data from 2025-10-15, `chf` is no longer significant in one of the frequentist models we consider below, nor is its credible interval bounded away from zero in the Bayesian model. It is retained in this summary but may or may not be retained in future models.
+- The coefficients for `cohort` are significant in all frequentist models, and, equivalently, are bounded away from zero in Bayes' models. They range from -0.93 to -1.16, which correspond to count means of  ~30% - 40% of count mean compared to non ibis. Note this is the mean of the count portion of the model, and not the overall count mean, which includes the zero inflation portion. The `cohort` does not appear to affect the zero inflation portion of the models.
+
+- On the other hand the same coefficients value gives statistical significance for the 10-20% percent increase in the probability of zero admissions for `ibis` cohort, depending on values of covariates. (We checked 60 year old with both `chf` and `afib`, and 60 year old with neither). 
+
+- Future work will include analysis of which covariates affect which portions of the model. For example, it appears that `chf` does significantly affect the zero inflation portion of the models. 
+
+
+## Models
+
+Based on earlier model results we consider Bayes and frequentist zero inflated Poisson and negative binomials models.
+
+For the zero inflated Poisson model we use the following model specification:
+
+$$
+\begin{aligned}
+\textrm{counts}_i & \sim ZIP(\pi_i, \mu_i) \\
+\log \mu_i & = \beta_0 + \beta_1 \textrm{cohort}_i + \beta_2 \textrm{chf}_i + \beta_3 \textrm{age}_i + \beta_4 \textrm{afib}_i\\
+\log \frac{\pi_i}{1 - \pi_i} & = \gamma_0 + \gamma_1 \textrm{age}_i \\
+\end{aligned}
+$$
+Note that the zero inflated negative binomial models model the mean the same way. The expected value for these models, which is the average inpatient count, is 
+
+$$
+(1 - \pi_i) \mu_i
+$$
+
+We scale the age variable as 
+
+$$
+age \rightarrow \frac{\textrm{age} - 60}{10}
+$$ 
+
+for interpretability and for numerical stability.
+
+
+### Effects sizes  
+
+Presently we are not modeling the $\pi$ using cohort. So we can compare cohorts with the same values of other predictors-whatever they are- simply using the ratios of the means $\mu_i$. 
+
+We cannot do across the board comparison of the effect on the probability of zero admissions as it varies depending on the values of the other covariates as well as the zero inflation probability $\pi$. But we can compare for given values of the covariates. 
+
+We do these comparisons below.
+
+
+```{r knitr, warning=FALSE, include=FALSE}
+options(htmltools.dir.version = FALSE, digits = 3)
+knitr::opts_chunk$set(
+  fig.width=7.5, fig.height=4.2, fig.retina=3,
+  out.width = "100%",
+  cache = FALSE,
+  echo = FALSE,
+  message = FALSE,
+  warning = FALSE,
+  fig.show = TRUE,
+  hiline = TRUE,
+  require("knitr")
+)
+
+```
+
+```{r echo=FALSE, warning=FALSE, include=FALSE}
+
+library(tidyverse)
+library(tidymodels)
+library(poissonreg)   
+#library(MASS)
+library(MetBrewer)
+library(wesanderson)
+
+library(lubridate)
+
+library(broom)
+library(pscl)
+library(patchwork)
+library(kableExtra)
+
+library(rstan)
+library(bayesplot)
+library(brms)
+library(bayesrules)
+
+
+
+
+
+```
+
+```{r}
+event_file <- "../../data/2025_10_15_utilization_events.csv"
+report_file <- "../../data/2025_10_15_utilization_report.csv"
+
+source("../R_files/read_clean.R")
+```
+
+
+```{r}
+
+clrs1 <- MetBrewer::met.brewer("Lakota")
+
+clrs2 <- MetBrewer::met.brewer("Tiepolo")
+clrs3 <- MetBrewer::met.brewer("OKeeffe2")
+clrs4 <- MetBrewer::met.brewer("VanGogh3")
+clrs5 <- MetBrewer::met.brewer("Homer1")
+
+```
+
+
+
+```{r echo = FALSE}
+
+term <- 270
+
+ibis_inpatient_table <- events_full %>%  filter(org_name == "Unicare - Study")  %>%
+    filter(event_type == "inpatient", event_start_date > ibis_coverage_start_date & 
+           event_start_date < ibis_coverage_end_date) %>%
+    filter(term !=0 & event_start_date < ibis_coverage_start_date + term |
+              term == 0 & event_start_date > ibis_coverage_start_date) %>%
+   summarize(.by = pid, inpatient_count = n()) %>% 
+    mutate(cohort = "ibis")
+
+control_inpatient_table <- events_full %>%  filter(org_name != "Unicare - Study")  %>%
+    filter(event_type == "inpatient", event_start_date < ibis_coverage_start_date &
+           event_start_date > coverage_start_date) %>% 
+    filter(term !=0 & event_start_date > ibis_coverage_start_date - term |
+            term == 0 & event_start_date < ibis_coverage_start_date) %>%
+    summarize(.by = pid, inpatient_count = n()) %>% 
+    mutate(cohort = "control")
+
+
+ibis_coverage_table <- report_full %>% 
+    filter(org_name == "Unicare - Study") %>% 
+      #filter(str_detect(org_name, "Unicare")) %>%
+    filter(ibis_coverage_end_date - ibis_coverage_start_date > term) %>% 
+    select(pid) %>% mutate(cohort = "ibis")
+
+control_coverage_table <- report_full %>% 
+    filter(org_name != "Unicare - Study") %>% 
+      #filter(!str_detect(org_name, "Unicare")) %>%
+    filter(ibis_coverage_start_date - coverage_start_date > term) %>% 
+    select(pid) %>% mutate(cohort = "control")
+
+coverage_table <- bind_rows(ibis_coverage_table, control_coverage_table)
+
+
+inpatient_coverage_table <- control_inpatient_table %>% 
+    bind_rows(ibis_inpatient_table) %>% right_join(coverage_table, by = c("pid", "cohort")) %>% 
+     replace(is.na(.), 0)
+
+```
+
+```{r, eval = FALSE}
+inpatient_coverage_table %>% 
+  group_by(inpatient_count) %>% 
+  summarize(frequency = n()) %>% 
+   kbl() %>% kable_paper() %>% kable_styling(latex_options = "HOLD_position") %>% kable_styling(latex_options = "HOLD_position")
+```
+
+```{r}
+patients <- report_full %>% select(pid, age, c(condition_count:urologic_cancer))  %>% 
+    filter(pid %in% inpatient_coverage_table$pid)
+
+patients_events <- inpatient_coverage_table %>% inner_join(patients, by = "pid") 
+```
+
+```{r}
+clrs1 <- MetBrewer::met.brewer("Lakota")
+clrs2 <- MetBrewer::met.brewer("Tiepolo")
+clrs3 <- MetBrewer::met.brewer("OKeeffe2")
+
+```
+
+
+### Summary statistics
+
+We consider admissions occurring within `r term` day window of observation.
+
+```{r}
+patients_events %>% 
+   summarize(.by = cohort, count = n()) 
+```
+
+
+#### Mean inpatient counts
+
+Overall
+```{r}
+patients_events %>% summarize(mean_count = mean(inpatient_count))
+```
+
+By cohort
+```{r}
+patients_events %>% summarize(.by = cohort, mean_count = mean(inpatient_count))
+```
+
+So this is more than 50% reduction. 
+
+#### Proportion if zero admissions
+Overall
+```{r}
+
+patients_events %>% summarize(prop_zero_admit = mean(inpatient_count > 0)) 
+
+```
+By cohort
+```{r}
+patients_events %>% summarize(.by = cohort, prop_zero_admit = mean(inpatient_count == 0))
+```
+
+#### Mean for patients with one or more admissions
+
+Overall
+```{r}
+patients_events %>% summarize(mean_at_least_one_admit = mean(inpatient_count > 0))
+```
+
+By cohort
+
+```{r}
+patients_events %>% summarize(.by = cohort, mean_at_least_one_admit = mean(inpatient_count > 0))
+```
+
+## Model results
+
+```{r}
+patients_events <- patients_events %>% 
+    mutate(age = (age - 60) / 10) 
+```
+
+
+**Frequentist zero inflated Poisson model**
+```{r}
+mod_zip3 <- pscl::zeroinfl(inpatient_count ~ cohort  + age + chf + atrial_fibrillation | age, data = patients_events, dist = "poisson") 
+
+summary(mod_zip3)
+
+
+```
+
+**Frequentist zero inflated negative binomial model**
+```{r}
+mod_zinb3 <- pscl::zeroinfl(inpatient_count ~ cohort  + age + chf + atrial_fibrillation | age, data = patients_events, dist = "negbin") 
+
+summary(mod_zinb3)
+
+
+```
+
+**Bayesian zero inflated Poisson model**
+```{r}
+load("../data/zip3_bayes_2025-10.RData") 
+
+fixef(zip3_bayes)
+
+```
+
+
+## Model fit and predictions
+
+We can see that these models are in agreement, and the results do fit the data well. 
+
+#### Expected number of inpatient admissions; probabilities of zero admissions
+
+```{r}
+df <- zip3_bayes %>% 
+    fixef() %>% as.data.frame()
+
+bayes_ibis_count_coef <- df["cohortibis",] %>% pull(Estimate)
+
+freq_ibis_count_coef <-  mod_zip3$coefficients$count[[2]]
+
+ave <- mean(c(bayes_ibis_count_coef, freq_ibis_count_coef))
+  
+```
+
+
+If we take the mean of the `cohortibis` count coefficients for the two models as an estimate, the models suggest a mean admission count for ibis cohort is `r round(exp(ave), 2)` times that of the control, assuming the same values for other predictors, which amounts to a `r (1 - round(exp(ave), 2))*100` percent reduction. 
+
+#### Zero admissions probabilities
+
+We can compare prevalences for outcomes in the data vs those predicted by the model. This was done in the `zer0_infl_admissions_models_2025-05_short.html`. We give a graphical illustration below with the Bayes model. Presently, we will compare what the models give as probabilities of admissions count outcomes for a single patient with the same age and conditions covariates, with one being `ibis` cohort and the other `control`. 
+
+
+For 60 year old patient, without no `chf` or `afib`, for ibis vs control, On the other hand, for the probability of zero admissions, the zero inflated Poisson model gives,
+
+```{r}
+df <- data.frame(cohort = c("control", "ibis"), age = c(0,0), chf = c(0,0),
+                 atrial_fibrillation = c(0,0))
+                 
+df %>% bind_cols(predict(mod_zip3, newdata = df, type = "prob")[,1:6])
+```
+
+while for patients with both chronic conditions we have
+
+```{r}
+df <- data.frame(cohort = c("control", "ibis"), age = c(1,1), chf = c(1,1),
+                 atrial_fibrillation = c(0,0))
+                 
+df %>% bind_cols(predict(mod_zip3, newdata = df, type = "prob")[,1:6])
+```
+
+In either case we more than  a 10% increase. This agrees with the difference in proportion of zero admits for ibis vs control above.
+
+
+### Post predictive checks
+
+We use Bayes model here. The coefficients are similar, but we can get a more complete picture of both the distributions of the coefficients, and the how well the model reproduces the observations, as well as model variability.
+
+
+
+```{r}
+mcmc_dens(zip3_bayes, pars = c("b_Intercept", "b_cohortibis",
+                               "b_age", "b_chf", "b_atrial_fibrillation", "b_zi_Intercept", "b_zi_age"),
+          facet_args = list(ncol = 2)) +
+  labs(title = "Posterior distributions for zero-inflated model parameters; scaled age")
+
+```
+
+### Credible intervals
+
+These are 50% and 90% "credible intervals". 
+
+**Remark** These are the middle quantiles in the distribution for the various coefficients. We can interpret this as a probability the coefficient lies within the interval, according to the model. By contrast, a frequentist confidence interval does not admit a probabilistic interpretation this way. In particular, we can say that the probability the true parameter is less than the upper bound of a 90% credible interval is 95%, because of the area in the left tail. In that sense, a 90% credible interval is comparable to the upper limit of a 95% frequentist confidence interval, if, as in this case, we are concerned with that upper limit being greater than zero or not. 
+
+```{r}
+mcmc_intervals(zip3_bayes, pars = vars(starts_with("b_"))) +
+  labs(title = "Posterior intervals for zero-inflated model parameters")
+
+
+```
+
+If anything, the model may inflate the zeros too much.
+```{r}
+y_rep <- posterior_predict(zip3_bayes)
+
+y_obs <- zip3_bayes$data$inpatient_count
+
+ppc_dens_overlay(y = y_obs, yrep = y_rep[1:100, ]) +
+  labs(
+    x = "Number of admissions", y = NULL,
+    title = "100 draws from the posterior") +
+  theme_minimal(base_size = 12)
+```
+
+We plot posterior draws by cohort. Not surprisingly there is more uncertainty with the Ibis cohort, which has much smaller sample size. 
+
+```{r}
+### Now by cohort
+y_rep_ibis <- posterior_predict(zip3_bayes, newdata = patients_events %>% filter(cohort == "ibis"))
+y_rep_control <- posterior_predict(zip3_bayes, newdata = patients_events %>% filter(cohort == "control"))
+
+y_obs_ibis <- patients_events %>% filter(cohort == "ibis") %>% pull(inpatient_count)
+y_obs_control <- patients_events %>% filter(cohort == "control") %>% pull(inpatient_count)
+
+p1 <- ppc_dens_overlay(y = y_obs_ibis, yrep = y_rep_ibis[1:100, ]) +
+  labs(
+    x = "Number of admissions", y = NULL) +
+  theme_minimal(base_size = 12) +
+  ggtitle("Density overlay for Ibis cohort")
+
+p2 <- ppc_dens_overlay(y = y_obs_control, yrep = y_rep_control[1:100, ]) +
+  labs(
+    x = "Number of admissions", y = NULL) +
+  theme_minimal(base_size = 12) +
+  ggtitle("Density overlay for control cohort")
+
+p1 + p2
+
+```
+
+We can plot proportions of various counts in the posterior and compare with actual proportions in the data. 
+
+```{r}
+y_obs <- zip3_bayes$data$inpatient_count
+y_rep <- posterior_predict(zip3_bayes)
+
+# Function to compute proportion of a given count
+make_prop_stat <- function(k) {
+  function(x) mean(x == k)
+}
+
+# Loop over counts 0 through 10 and compute stats
+stats_df <- map_dfr(0:5, function(k) {
+  stat_fun <- make_prop_stat(k)
+  
+  tibble(
+    count = k,
+    yrep_stats = apply(y_rep, 1, stat_fun),   # each row is a draw
+    y_obs_stat = stat_fun(y_obs)
+  )
+}, .id = "id") %>%
+  mutate(count = as.integer(count))
+
+# Unnest for ggplot
+stats_long <- stats_df %>%
+  select(count, yrep_stats, y_obs_stat) %>%
+  unnest(yrep_stats = yrep_stats)
+
+# Plot
+ggplot(stats_long, aes(x = yrep_stats)) +
+  geom_density(fill = "skyblue", alpha = 0.6) +
+  geom_vline(aes(xintercept = y_obs_stat), color = "red", linetype = "dashed") +
+  facet_wrap(~ count, scales = "free") +
+  labs(
+    title = "Posterior predictive distribution of proportion for each count (0–10)",
+    x = "Proportion in posterior samples",
+    y = "Density"
+  ) +
+  theme_minimal()
+```
+
+And also do this by cohort. There is not enough data
+
+```{r}
+
+stats_df_cohort <- map_dfr(0:5, function(k) {
+  stat_fun <- make_prop_stat(k)
+  
+  tibble(
+    count = k,
+    yrep_stats_ibis = apply(y_rep_ibis, 1, stat_fun),   # each row is a draw
+    y_obs_stat_ibis = stat_fun(y_obs_ibis),
+    yrep_stats_control = apply(y_rep_control, 1, stat_fun),
+    y_obs_stat_control = stat_fun(y_obs_control)
+  )
+}, .id = "id") %>%
+  mutate(count = as.integer(count))
+
+
+stats_long_cohort <- stats_df_cohort %>%
+  select(count, yrep_stats_ibis, y_obs_stat_ibis, yrep_stats_control, y_obs_stat_control) %>%
+  pivot_longer(
+    cols = -count,
+    names_to = c(".value", "cohort"),
+    names_pattern = "(yrep_stats|y_obs_stat)_(.+)"
+  )
+
+
+p_ibis <- stats_long_cohort %>%
+  filter(cohort == "ibis") %>%
+  ggplot(aes(x = yrep_stats)) +
+  geom_density(fill = "blue", alpha = 0.6) +
+  geom_vline(aes(xintercept = y_obs_stat), color = "red", linetype = "dashed") +
+  facet_wrap(~ count, scales = "free") +
+  labs(
+    title = "Posterior predictive distribution by count (IBIS cohort)",
+    x = "Proportion in posterior samples",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+# Plot for CONTROL
+p_control <- stats_long_cohort %>%
+  filter(cohort == "control") %>%
+  ggplot(aes(x = yrep_stats)) +
+  geom_density(fill = "orange", alpha = 0.6) +
+  geom_vline(aes(xintercept = y_obs_stat), color = "red", linetype = "dashed") +
+  facet_wrap(~ count, scales = "free") +
+  labs(
+    title = "Posterior predictive distribution by count (Control cohort)",
+    x = "Proportion in posterior samples",
+    y = "Density"
+  ) +
+  theme_minimal()
+
+p_ibis
+
+p_control
+
+```
+

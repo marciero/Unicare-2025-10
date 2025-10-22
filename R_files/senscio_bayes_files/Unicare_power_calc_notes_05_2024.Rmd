@@ -1,0 +1,624 @@
+---
+title: "Unicare study power and sample size notes"
+output: pdf_document
+date: "May 2024"
+---
+
+```{r setup, echo=FALSE, include = FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(tidyverse)
+library(pwr)
+library(WebPower)
+```
+
+
+Generally we seek to detect 20% effect at 80% power, 5% significance.
+
+We consider treatment effect
+
+- proportion admitted;
+- mean number of admissions per patient year.
+- coefficient of treatment indicator variable in for logistic, Poisson, and negative binomial regression
+- zero-inflated Poisson and Negative binomial models; Bayes models
+- simulations of the above using values from existing Unicare and Ibis member data.
+- effect of controlling for other covariates, which tend to increase efficiency; that is decrease min sample size.
+
+All estimates assume equal number of treatment and control. Sample sizes are for the total in both arms.
+
+### Summary
+
+Most of the analysis points to sample sizes of larger than 1000  for 20% effect, 80% power, 5% significance. The one exception is test for Poisson mean, which is 423 for 15% effect, 200 for 22% effect. But there this does not agree with the minimum sample for the coefficient for treatment in the Poisson model, which should be an almost equivalent approach. The simulations seem to give much more conservative (higher) estimates. The effect of increased efficiency seems to have been minimal. But note that these simulations were of zero inflated data, which does not share the property of the Poisson model that the variance and the mean are equal. There might be something else going on here as well. Also regarding the simulations, coefficient values were obtained by trial and error to produce the sample statistics in the Unicare data, as the raw data was not available at the time. Additionally, no other covariates were considered. In light of these, efficiency gains from including all the covariates is likely to be greater than that seen in the simulations.
+
+## Proportion admitted
+
+Using normal approximation to binomial and assuming equal number in each group, standard sample size formulas give, for values in line with the Unicare/Ibis data:
+
+```{r, echo=FALSE}
+df <- data.frame( base_rate = c(0.25, 0.25, 0.25), treat_rate= c(0.20, 0.18, 0.15)) %>%
+    mutate( percent_reduce = (base_rate - treat_rate)/base_rate) %>%
+    mutate(odds_ratio = (treat_rate/(1-treat_rate))/(base_rate/(1-base_rate))) %>%
+    mutate(two_side_n = map2(base_rate, treat_rate,
+                             ~power.prop.test(p1 = .x, p2 = .y, sig.level = 0.05, power = .80)$n*2)) %>%
+    mutate(one_side_n = map2(base_rate, treat_rate,
+                             ~power.prop.test(p1 = .x, p2 = .y, sig.level = 0.05, power = .80, alternative = "one.sided")$n*2))
+
+df %>%  knitr::kable()
+```
+### Poisson means- number of admissions
+
+Treating the number of admissions per patient-year as a Poisson process with mean $\lambda$, the total number of
+admissions in $n$ patient-years is approximately normal if $n\lambda > 30$.
+For our data $\lambda$ is apparently contained in the range 0.30 - 0.45, or equivalently, 300 - 450 admissions per 1000 patient years.
+
+```{r, echo=FALSE}
+pois_power <- function(m1, m2, alpha = 0.05, beta = 0.8, two.sided = TRUE){
+    if(two.sided == TRUE) {
+        gamma <- alpha/2
+    } else {
+        gamma <- alpha
+    }
+    (m1 + m2)*((qnorm(1- gamma) + qnorm(1- beta))/(m2 - m1))^2
+}
+
+df <- data.frame( base_mean = c(0.45, 0.45, 0.45), treat_mean= c(0.40, 0.38, 0.35)) %>%
+    mutate( percent_reduce = (base_mean - treat_mean)/base_mean) %>%
+    mutate(two_side_n = 2*pois_power(base_mean, treat_mean)) %>%
+    mutate(one_side_n = 2*pois_power(base_mean, treat_mean, two.sided = FALSE))
+
+df %>%  knitr::kable()
+```
+These estimates seem very low and do not agree with simulation done below.
+
+
+#### Using logistic regression
+
+A near equivalent approach is to test the coefficient of the treatment indicator variable in a logistic regression where ${\rm{logit}} \mu =  \beta_0 + \beta_1 \times {\rm treat}$ where `treat` is 0 or 1 for control or treated, and the approximation with $\hat{\beta}_1/SE(\hat{\beta}_1) \sim \mathcal{N}(0,1)$. We confirmed the above results. For example, using the `WebPower` package we obtain
+
+```{r, echo = FALSE}
+wp.logistic(n = NULL, p0 = 0.25, p1 = 0.20, alpha = 0.05,
+            power = 0.8, alternative = "two.sided",
+            family = "Bernoulli", parameter = 0.5)
+
+```
+
+
+
+#### Using Poisson regression
+Test the coefficient of the treatment indicator variable in a Poisson regression; again with the WebPower package we obtain
+
+```{r, echo = FALSE}
+wp.poisson(exp0 = 0.45, exp1 = 0.8, alpha = 0.05,  power = 0.8, family = "Bernoulli",
+           parameter = 0.5,
+           alternative = "two.sided")
+```
+The values above would correspond to `base_mean` = 0.45 and `treat_mean` = 0.45*0.8 = 0.36\footnote{The `exp()` is because the Poisson model would be $\log \mu = \beta_0 + \beta_1 \times {\rm treat}$ where `treat` is 0 or 1 for control or treated; resp, and so $\mu = e^{\beta_0} e^{\beta_1 \times {\rm treat}}$, with  $e^{\beta_1}$ representing the multiplier of base mean for the treated.}.
+
+The method above also uses the normal approximation for $\hat{\beta}_1$.
+
+
+## Simulations
+
+We first do a simple simulation to check difference in Poisson means obtained above. For Poisson regression, the log of the mean is typically modeled as a linear function of the covariates.
+$$
+{\log} \ \lambda_i = \beta_0 + \beta_{ibis} \times {\rm ibis}_i
+$$
+where
+
+- $\lambda_i$ is the mean number of admissions for patient $i$,
+- ${\rm ibis}_i$ is the treatment indicator for patient $i$,
+- $\beta_0$ is the mean number of admissions for the control group,
+- $\beta_{ibis}$ is the effect of treatment on the mean number of admissions.
+
+It follows that the mean number of admissions is $e^{\beta_0} e^{\beta_{ibis} \times {\rm ibis}_i}$ and so the effect of treatment is $e^{\beta_{ibis}}$. Thus
+
+- $\beta_{0} = \log 0.45 = -0.799$ corresponds to a base mean of 0.45 for control.
+- $\beta_{ibis} = \log 0.8 = -0.223$ corresponds to  20% reduction.
+
+We generate 100000 samples of random Poisson random data, with means $\lambda_i$ with these parameters  where `ibis` is randomly assigned 0 or 1.
+
+```{r, echo=FALSE}
+pois_data <- function(n, lambda_int = log(0.45), lambda_ibis = log(0.8)) {
+
+     ibis <- rbinom(n, 1, 0.5)
+    log_lambda <- lambda_int + lambda_ibis*ibis
+    lambda <- exp(log_lambda)
+
+    y <- rpois(n, lambda)
+
+    return(data.frame(y, ibis))
+}
+
+df <- pois_data(100000)
+
+```
+
+Here is what a simulated data set looks like. There are a lot of zeros because of the low value of the mean.
+
+```{r, echo=FALSE}
+df %>% dplyr::select(y, ibis) %>%  head() %>% knitr::kable()
+```
+
+We can see we get about a roughly 20% reduction in the mean for `ibis`.
+```{r, echo = FALSE}
+cat("ibis yes", mean(df$y[df$ibis == 1]), "\n")
+cat("ibis no", mean(df$y[df$ibis == 0]), "\n")
+cat("percent change", (mean(df$y[df$ibis == 0]) - mean(df$y[df$ibis == 1]))/mean(df$y[df$ibis == 0]), "\n")
+
+```
+
+To estimate power, we simulate a given number of samples and test for significance- we use a simple t test- and repeat the process many times, and record the proportion of times the result is significant.
+
+
+```{r, echo = FALSE}
+run_mean_test <- function(data) {
+    test <- t.test(y ~ ibis, data, var.equal = TRUE)
+
+    return(test$p.value)
+}
+
+
+sim_pois_mean <- function(n) {
+    df <- pois_data(n)
+    return(run_mean_test(df))
+}
+
+```
+
+```{r, echo = FALSE}
+
+results <- data.frame()
+
+for (n in c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500)) {
+  prop_sig <- mean(replicate(5000, sim_pois_mean(n)) < 0.05)
+
+results <- rbind(results, data.frame(n = n, prop_sig = prop_sig))
+}
+
+```
+
+
+```{r, echo = FALSE}
+results %>% knitr::kable()
+```
+
+```{r, echo = FALSE}
+results %>% ggplot(aes(n, prop_sig)) + geom_line() + geom_point() +
+    labs(title = "Power for mean of admitted", x = "Number of samples", y = "Proportion significant")
+
+```
+
+So we see the results are not consistent with the power calculations above.
+
+
+### Zero-inflated data
+
+One way to model zero-inflated count data is as a bernouli process with probability $\theta$ to model so called "structural" zero counts, and a Poisson or negative binomial process with mean $\lambda$  to model non-zero counts, and also adding additional zeros. For parameter values for generating simulated data we will use sample Unicare and Ibis data.
+
+#### Zero inflated Poisson
+
+We will use a zero inflated Poisson model\footnote{We will likely use a zero inflated negative binomial model for the statistical analysis, as the count data are overdispersed as well as zero inflated. Negative binomial models contain an additional dispersion parameter that can account for this.} We can express the probability of an outcome $y_i = k$ admissions as
+
+$$
+P(y_i = 0) =  \theta_i + (1- \theta_i ) \, P_{pois}(y_i = 0; \lambda_i)
+$$
+$$
+P(y_i = k \neq 0) =  (1- \theta ) \, P_{pois}(y_i = k; \lambda_i)
+$$
+where $P_{pois}(\cdot; \lambda)$ is the Poisson probability with mean $\lambda$. A standard approach is to model $\theta$ as
+
+$$
+{\rm logit} \ \theta_i = \alpha_0 + \alpha_{age} \times {\rm age}_i + \alpha_{ibis} \times {\rm ibis}_i
+$$
+where `ibis` is either 0 or 1, and  ${\rm logit} \ x = \log \frac{x}{1-x}$. We model $\lambda$ as (also standard approach)
+
+$$
+{\log} \ \lambda_i = \beta_0 + \beta_{age} \times {\rm age}_i + \beta_{ibis} \times {\rm ibis}_i
+$$
+
+One thing to keep in mind is that with the model written this way, increasing ${\rm logit} \ \theta$ increases the probability of zero admissions- a good thing- while, and increasing $\log  \lambda$ increases the mean admissions- a bad thing.
+
+We  generate 10000 samples simulated data with
+
+- `age` is uniform on [60, 90]
+- We scale the age data so that the age coefficients for both the structural and Poisson portions of the model represent approx percent increases per ten years from baseline of 70 years, with decrease for ages less than 70. Similarly for the Poisson mean portion of the model.
+- `ibis` is randomly assigned
+- `ibis` confers advantage in reducing admissions; both from structural and Poisson components.
+
+We can tune to approximate values from Unicare and Ibis data, with reductions in outcomes for `ibis`. We start with the following coefficients.
+
+- $\alpha_0 = 0.3$, $\alpha_{age} = -0.05$, $\alpha_{ibis} = 0.2$
+- $\beta_0 = -0.7$, $\beta_{age} = 0.9$, $\beta_{ibis} = -0.2$
+
+```{r, echo=FALSE}
+gen_data <- function(n, theta_int = 0.3, lambda_int = -0.7,
+                        theta_age = -0.05, lambda_age = .9,
+                        theta_ibis = 0.2, lambda_ibis = 0.2) {
+    age <- round(runif(n, 60, 90))
+    ibis <- rbinom(n, 1, 0.5)
+    logit_theta <- theta_int  + 0.1*(age - 70 )* theta_age + theta_ibis*ibis
+    theta <- 1 / (1 + exp(-logit_theta))
+
+    log_lambda <- lambda_int  + 0.1*(age-70) * lambda_age - lambda_ibis*ibis
+    lambda <- exp(log_lambda)
+
+    y_nz <- rpois(n, lambda)   ## for testing with non-zero inflated
+    y <- ifelse(runif(n) < theta, 0, rpois(n, lambda))
+
+    yis0 = y == 0  # for checking proportions of zero admissions
+                    #  (could just use df$y == 0)
+    ynot0 = y != 0
+    y_nzis0 = y_nz == 0
+
+   return(data.frame(y, yis0, y_nz, y_nzis0, ynot0, age, ibis))
+}
+
+
+df <- gen_data(10000)
+```
+
+Here is what a simulated data set looks like
+
+```{r, echo=FALSE}
+df %>% dplyr::select(y, age, ibis) %>%  head() %>% knitr::kable()
+```
+
+
+Proportion of zeros:
+```{r, echo = FALSE}
+
+cat("ibis yes", mean(df$y[df$ibis == 1] == 0), "\n")
+
+cat("ibis no", mean(df$y[df$ibis == 0] == 0), "\n")
+
+cat("percent change", (mean(df$y[df$ibis == 1] == 0)- mean(df$y[df$ibis == 0] == 0))/mean(df$y[df$ibis == 0] == 0), "\n")
+
+
+```
+
+On the other hand, the admittance rates are 1 - minus these values:
+
+```{r, echo = FALSE}
+
+cat("ibis yes", mean(df$ynot0[df$ibis == 1]), "\n")
+
+cat("ibis no", mean(df$ynot0[df$ibis == 0]), "\n")
+
+cat("percent change", (mean(df$ynot0[df$ibis == 1]) - mean(df$ynot0[df$ibis == 0]))/mean(df$ynot0[df$ibis == 0]), "\n")
+
+
+```
+
+
+Mean visits
+```{r, echo = FALSE}
+cat("ibis yes", mean(df$y[df$ibis == 1]), "\n")
+cat("ibis no", mean(df$y[df$ibis == 0]), "\n")
+cat("percent change", (mean(df$y[df$ibis == 0]) - mean(df$y[df$ibis == 1]))/mean(df$y[df$ibis == 0]), "\n")
+
+```
+
+#### Counts
+
+```{r, echo =FALSE}
+df %>% ggplot(aes(y)) + geom_bar() + facet_wrap(~ibis, labeller = as_labeller(c(`0` = "ibis no", `1` = "ibis yes"))) +
+    labs(title = "Admissions", x = "Number of admissions", y = "Frequency")
+
+```
+
+
+
+
+### Power simulation for proportion of admitted
+
+The results below are from 5000 simulations for each sample size.
+
+```{r, echo = FALSE}
+run_prop_test <- function(data) {
+    df_ibis <- data %>% filter(ibis == 1)
+    df_no_ibis <- data %>% filter(ibis == 0)
+
+   test <- prop.test(c(sum(df_ibis$yis0), sum(df_no_ibis$yis0)),
+                     c(nrow(df_ibis), nrow(df_no_ibis)))
+          return(test$p.value)
+}
+
+sim <- function(n) {
+    df <- gen_data(n)
+    return(run_prop_test(df))
+}
+```
+
+```{r, echo = FALSE}
+
+results <- data.frame()
+
+for (n in c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500)) {
+  prop_sig <- mean(replicate(5000, sim(n)) < 0.05)
+
+results <- rbind(results, data.frame(n = n, prop_sig = prop_sig))
+}
+
+```
+
+```{r, echo = FALSE}
+results %>% knitr::kable()
+```
+
+```{r, echo = FALSE}
+results %>% ggplot(aes(n, prop_sig)) + geom_line() + geom_point() +
+    labs(title = "Power simulation for proportion of admitted", x = "Number of samples", y = "Proportion significant")
+
+```
+
+
+If we wanted to cheat we could aim for 20% increase in zero count rate. Tuning the data generation and we get, for 10000 samples
+
+```{r, echo = FALSE}
+df2 <- gen_data(1e5, theta_int = 0.025, lambda_int = -0.7,
+                theta_age = -0.05, lambda_age = .9,
+                theta_ibis = 1.2, lambda_ibis = 0.09)
+```
+
+Proportion of zeros:
+```{r, echo = FALSE}
+
+cat("ibis yes", mean(df2$y[df2$ibis == 1] == 0), "\n")
+
+cat("ibis no", mean(df2$y[df2$ibis == 0] == 0), "\n")
+
+cat("percent change", -(mean(df2$y[df2$ibis == 0] == 0) - mean(df2$y[df2$ibis == 1] == 0))/mean(df2$y[df2$ibis == 0] == 0), "\n")
+
+
+```
+
+But note that the corresponding change in the admittance rate is now
+
+```{r, echo = FALSE}
+((1 - mean(df2$y[df2$ibis == 0] == 0)) - (1 - mean(df2$y[df2$ibis == 1] == 0)))/
+(1 - mean(df2$y[df2$ibis == 0] == 0))
+```
+
+But in any case if we do this and simulate we obtain
+
+```{r, echo = FALSE}
+
+sim2 <- function(n) {
+    df <- gen_data(n, theta_int = 0.025, lambda_int = -0.7,
+                theta_age = 0.05, lambda_age = .9,
+                theta_ibis = 1.2, lambda_ibis = 0.09)
+        gen_data(n)
+    return(run_prop_test(df))
+}
+```
+
+```{r, echo = FALSE}
+
+results2 <- data.frame()
+
+for (n in c(200, 300, 500)) {
+  prop_sig <- mean(replicate(5000, sim2(n)) < 0.05)
+
+results2 <- rbind(results2, data.frame(n = n, prop_sig = prop_sig))
+}
+
+```
+
+```{r, echo = FALSE}
+results2 %>% knitr::kable()
+```
+
+#### Test on regression coefficient; include age as covariate
+
+The above should be equivalent to testing the coefficient of the treatment indicator variable in a logistic regression with just the `ibis` covariate. But if include covariates such as `age` that are predictive of the outcome, we should see an increase in efficiency; that is, less variance in estimates, which translates to greater power.
+
+We do the simulations with the original parameter values above. We see only a marginal increase in power with the age covariate.
+
+```{r, echo = FALSE}
+##
+run_logistic_coef_test <- function(data) {
+    test <- glm(yis0 ~ ibis + age, data, family = "binomial") %>% summary()
+    ibis_est <- test$coefficients["ibis", 'Estimate']
+    ibis_se <- test$coefficients["ibis", 'Std. Error']
+    ibis_p <- test$coefficients["ibis", 'Pr(>|z|)']
+    return(c(ibis_est, ibis_se, ibis_p))
+}
+
+sim_logistic_test <- function(n) {
+    df <- gen_data(n)
+    return(run_logistic_coef_test(df))
+}
+
+```
+
+```{r, echo = FALSE}
+
+results3 <- data.frame()
+
+for (n in c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500)) {
+    prop_sig <- mean(replicate(5000, sim_logistic_test(n)[3]) < 0.05)
+
+    results3 <- rbind(results3, data.frame(n = n, prop_sig = prop_sig))
+}
+```
+
+```{r, echo = FALSE}
+results3 %>% knitr::kable()
+```
+
+
+
+```{r, echo = FALSE}
+results3 %>% ggplot(aes(n, prop_sig)) + geom_line() + geom_point() +
+    labs(title = "Power simulation for proportion of admitted", x = "Number of samples", y = "Proportion significant")
+
+```
+
+We can see there is a lot of variability in the coefficient estimates, even with n = 1000. For significance we want the confidence interval to not contain zero\footnote{Note that the coefficient is positive, corresponding to higher probability of zero}.
+
+```{r, echo = FALSE}
+reps <- replicate(100, sim_logistic_test(1000))
+
+reps_df <- data.frame(rep = 1:ncol(reps), estimate = reps[1,], se = reps[2,], p = reps[3,])
+reps_df %>% ggplot(aes(rep, estimate)) +
+    geom_point() +
+    geom_errorbar(aes(ymin =
+                estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+    geom_hline(yintercept = 0, color = "red") +
+    labs(title = "Coefficient estimates and 95% confidence intervals, 100 reps n = 1000", x = "rep", y = "estimate")
+```
+
+### Power simulation for mean number of admissions
+
+We adjust the generating process for effect size approx 20% reduction in mean number of admissions, by decreasing the reduction to the mean due to `ibis`. A sample of 10000 gives the following.
+
+```{r, echo=FALSE}
+gen_data <- function(n, theta_int = 0.3, lambda_int = -0.7,
+                        theta_age = -0.05, lambda_age = .9,
+                        theta_ibis = 0.2, lambda_ibis = 0.12) {
+    age <- round(runif(n, 60, 90))
+    ibis <- rbinom(n, 1, 0.5)
+    logit_theta <- theta_int  + 0.1*(age - 70 )* theta_age + theta_ibis*ibis
+    theta <- 1 / (1 + exp(-logit_theta))
+
+    log_lambda <- lambda_int  + 0.1*(age-70) * lambda_age - lambda_ibis*ibis
+    lambda <- exp(log_lambda)
+
+    y_nz <- rpois(n, lambda)   ## for testing with non-zero inflated
+    y <- ifelse(runif(n) < theta, 0, rpois(n, lambda))
+
+    yis0 = y == 0  # for checking proportions of zero admissions
+                    #  (could just use df$y == 0)
+    y_nzis0 = y_nz == 0
+
+   return(data.frame(y, yis0, y_nz, y_nzis0, age, ibis))
+}
+
+
+df <- gen_data(10000)
+```
+
+Mean number of admissions:
+```{r, echo = FALSE}
+
+cat("ibis yes", mean(df$y[df$ibis == 1]), "\n")
+
+cat("ibis no", mean(df$y[df$ibis == 0]), "\n")
+
+cat("percent change", (mean(df$y[df$ibis == 0]) - mean(df$y[df$ibis == 1]))/mean(df$y[df$ibis == 0]), "\n")
+
+
+```
+
+Now run the simulations, using t test to test significance of difference in means.
+
+```{r, echo = FALSE}
+run_mean_test <- function(data) {
+    test <- t.test(y ~ ibis, data)
+    return(test$p.value)
+}
+
+sim_ttest <- function(n) {
+    df <- gen_data(n)
+    return(run_mean_test(df))
+}
+```
+
+
+```{r, echo = FALSE}
+
+results2 <- data.frame()
+
+for (n in c(750, 1000, 1250, 1500, 1750, 2000, 2250, 2500)) {
+  prop_sig <- mean(replicate(5000, sim_ttest(n)) < 0.05)
+
+results2 <- rbind(results2, data.frame(n = n, prop_sig = prop_sig))
+}
+
+```
+
+```{r, echo = FALSE}
+results2 %>% knitr::kable()
+```
+
+```{r, echo = FALSE}
+results2 %>% ggplot(aes(n, prop_sig)) + geom_line() + geom_point() +
+    labs(title = "Power simulation for mean admissions", x = "Number of samples", y = "Proportion significant")
+
+```
+
+
+#### Test on regression coefficient; include age as covariate
+
+As before, we test the coefficient of the treatment indicator variable in a Poisson regression, including the age covariate.
+
+```{r, echo = FALSE}
+## Test with poisson regression
+run_poisson_coef_test <- function(data) {
+    test <- glm(y ~ ibis + age, data, family = "poisson") %>% summary()
+    ibis_est <- test$coefficients["ibis", 'Estimate']
+    ibis_se <- test$coefficients["ibis", 'Std. Error']
+    ibis_p <- test$coefficients["ibis", 'Pr(>|z|)']
+    return(c(ibis_est, ibis_se, ibis_p))
+}
+
+sim_poisson_test <- function(n) {
+    df <- gen_data(n)
+    return(run_poisson_coef_test(df))
+}
+```
+
+
+```{r, echo = FALSE}
+
+results4 <- data.frame()
+
+for (n in c(750, 1000, 1250, 1500, 1750, 2000, 2250)) {
+  prop_sig <- mean(replicate(5000, sim_poisson_test(n)[3]) < 0.05)
+
+results4 <- rbind(results4, data.frame(n = n, prop_sig = prop_sig))
+}
+
+```
+
+```{r, echo = FALSE}
+results4 %>% knitr::kable()
+```
+
+
+
+We again look at the variability in the coefficient estimates with n = 1000\footnote{Here the coefficient is negative, reflecting a reduction in the mean}.
+
+```{r, echo = FALSE}
+reps <- replicate(100, sim_poisson_test(1000))
+
+reps_df <- data.frame(rep = 1:ncol(reps), estimate = reps[1,], se = reps[2,], p = reps[3,])
+reps_df %>% ggplot(aes(rep, estimate)) +
+    geom_point() +
+    geom_errorbar(aes(ymin =
+                estimate - 1.96*se, ymax = estimate + 1.96*se)) +
+    geom_hline(yintercept = 0, color = "red") +
+    labs(title = "Coefficient estimates and 95% confidence intervals, 100 reps n = 1000", x = "rep", y = "estimate")
+```
+
+
+## Math notes
+
+Most of our power calculations use a normal approximation for an estimate $\hat{\theta}$ of parameter $\theta$, which in our case is either a mean or a proportion, and we look for differences in treated and untreated, $\theta_t$, and $\theta_c$; resp. When $\theta_c  - \theta_t = \delta$, $\hat{\theta}_c  - \hat{\theta}_t - \delta$ is normally distributed with zero mean. If the $\theta$ are proportions, with equal sample size equal $n$ for treatment and control, the  standard error is $SE = \sqrt{\frac{2\hat{p}(1-\hat{p})}{n}}$ where $\hat{p}$ is the pooled mean proportion. We get an analogous expression when the $\theta$ are means; in particular, the standard error is again proportional to $1/\sqrt{n}$.
+
+For a two sided test, at significance $\alpha$, the probability of rejecting the null hypothesis $H_0: \theta_t = \theta_c$ is
+
+\begin{eqnarray*}
+\beta & = & P\left(\frac{\hat{\theta}_c  - \hat{\theta}_t}{SE}  >  z_{\alpha/2}\right) \\
+& = & P\left(\frac{\hat{\theta}_c  - \hat{\theta}_t - \delta}{SE}  >  z_{\alpha/2} - \frac{\delta}{SE}\right)  \\
+& = & 1 -  \Phi\left(z_{\alpha/2} - \frac{\delta}{SE}  \right) \\
+& = & \Phi\left(\frac{\delta}{SE} - z_{\alpha/2}\right)
+\end{eqnarray*}
+
+where $\Phi(x)$ is the "erf" function giving the probability $P(Z < x )$ where $Z \sim \mathcal{N}(0,1)$, and ``critical values" $z_\gamma$ are defined by  $1 - \Phi(z_\gamma) = \gamma$.  It follows that
+
+$$
+z_\beta = \frac{\delta}{SE} - z_{\alpha/2}
+$$
+
+
+For given $\beta$, $\alpha$, and $\delta$, we can solve for $n$, which is inside the expression for $SE$. The expression for $SE$ depends on what is being estimated, but all are proportional to $1/\sqrt{n}$. In the case of means, if standard deviations are not known, the $Z$ standard normal distribution is replaced by $t$ distribution but the arguments are similar.
