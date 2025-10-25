@@ -955,7 +955,7 @@ pval <- pchisq(LRT, df = 1, lower.tail = FALSE)
  
 ```
 
-For example, comparing the ZIP3, and ZINB3, which have the same covariates and model specification, except with the latter having an additional dispersion parameter on the count portion of the model, using the we find `r pval `
+For example, comparing the ZIP3, and ZINB3, which have the same covariates and model specification, except with the latter having an additional dispersion parameter on the count portion of the model, the p-value on the likelihood ratio test is `r pval `, supporting the use of the negative binomial model.
 
 # Bayesian zero inflated Poisson regression
 
