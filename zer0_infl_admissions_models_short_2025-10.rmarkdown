@@ -1443,3 +1443,4 @@ plot_beta_binomial(5, 5, 7, 10) +
 :::::
 
 By contrast, our maximum likelihood estimate of $\pi$ would be the peak of the likelihood, which is the same as the posterior for flat prior.
+

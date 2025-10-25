@@ -190,13 +190,13 @@ clrs3 <- MetBrewer::met.brewer("OKeeffe2")
 ```
 
 
-### Summary statistics
+### Summary statistics; admissions
 
 We consider admissions occurring within `r term` day window of observation.
 
 ```{r}
 patients_events %>% 
-   summarize(.by = cohort, count = n()) 
+   summarize(.by = cohort, count = n()) %>% kbl()
 ```
 
 
@@ -204,40 +204,46 @@ patients_events %>%
 
 Overall
 ```{r}
-patients_events %>% summarize(mean_count = mean(inpatient_count))
+patients_events %>% summarize(mean_count = mean(inpatient_count)) %>% kbl()
 ```
 
 By cohort
 ```{r}
-patients_events %>% summarize(.by = cohort, mean_count = mean(inpatient_count))
+patients_events %>% summarize(.by = cohort, mean_count = mean(inpatient_count)) %>% kbl()
 ```
 
 So this is more than 50% reduction. 
 
-#### Proportion if zero admissions
+#### Proportion of zero admissions
 Overall
 ```{r}
 
-patients_events %>% summarize(prop_zero_admit = mean(inpatient_count > 0)) 
+patients_events %>% summarize(prop_zero_admit = mean(inpatient_count > 0)) %>% 
+  kbl()
 
 ```
 By cohort
 ```{r}
-patients_events %>% summarize(.by = cohort, prop_zero_admit = mean(inpatient_count == 0))
+patients_events %>% summarize(.by = cohort, prop_zero_admit = mean(inpatient_count == 0)) %>%               kbl()
 ```
 
-#### Mean for patients with one or more admissions
+#### Mean admissions count for patients with one or more admissions
 
 Overall
 ```{r}
-patients_events %>% summarize(mean_at_least_one_admit = mean(inpatient_count > 0))
+patients_events %>% 
+  summarize(mean_at_least_one_admit = mean(inpatient_count > 0)) %>% 
+  kbl()
 ```
 
 By cohort
 
 ```{r}
-patients_events %>% summarize(.by = cohort, mean_at_least_one_admit = mean(inpatient_count > 0))
+patients_events %>% summarize(.by = cohort, mean_at_least_one_admit = mean(inpatient_count > 0))  %>% 
+  kbl()
 ```
+
+
 
 ## Model results
 
@@ -248,22 +254,57 @@ patients_events <- patients_events %>%
 
 
 **Frequentist zero inflated Poisson model**
+
+This is the model specification above.
+
 ```{r}
 mod_zip3 <- pscl::zeroinfl(inpatient_count ~ cohort  + age + chf + atrial_fibrillation | age, data = patients_events, dist = "poisson") 
 
 summary(mod_zip3)
 
+count_coefs <- summary(mod_zip3)$coefficients$count %>%
+  as.data.frame() %>%  rownames_to_column(var = "term") %>% 
+  mutate(estimate = Estimate, p.value = `Pr(>|z|)`) %>%
+  mutate(component = "count") %>% select(term, component, estimate, p.value) %>%  mutate(p.value = round(p.value, 4))
+zero_coefs <- summary(mod_zip3)$coefficients$zero %>%
+  as.data.frame() %>%  rownames_to_column(var = "term") %>% 
+  mutate(estimate = Estimate, p.value = `Pr(>|z|)`) %>% 
+  mutate(component = "zero") %>%  select(term, component, estimate, p.value)
+
+#bind_rows(count_coefs, zero_coefs) %>% kbl()
 
 ```
 
 **Frequentist zero inflated negative binomial model**
+
+Described in the zero inflated models document. The same model spec as zero inflated Poisson, but with additional dispersion parameter $\theta$ which is estimated from the data (and not modeled) and increases the variance of the count portion of the model by $\mu^2/\theta$. 
+
 ```{r}
-mod_zinb3 <- pscl::zeroinfl(inpatient_count ~ cohort  + age + chf + atrial_fibrillation | age, data = patients_events, dist = "negbin") 
+mod_zinb <- pscl::zeroinfl(inpatient_count ~ cohort  + age + chf + atrial_fibrillation | age, data = patients_events, dist = "negbin") 
 
-summary(mod_zinb3)
+summary(mod_zinb)
 
+count_coefs <- summary(mod_zinb)$coefficients$count %>%
+  as.data.frame() %>%  rownames_to_column(var = "term") %>% 
+  mutate(estimate = Estimate, p.value = `Pr(>|z|)`) %>%
+  mutate(component = "count") %>% select(term, component, estimate, p.value) %>%  mutate(p.value = round(p.value, 4))
+zero_coefs <- summary(mod_zinb)$coefficients$zero %>%
+  as.data.frame() %>%  rownames_to_column(var = "term") %>% 
+  mutate(estimate = Estimate, p.value = `Pr(>|z|)`) %>% 
+  mutate(component = "zero") %>%  select(term, component, estimate, p.value)
+
+#bind_rows(count_coefs, zero_coefs) %>% kbl()
 
 ```
+
+It looks like the dispersion parameter is not significant. But the null is in fact that $\log \theta = 0$; that is, $\theta = 1$. To test whether the dispersion is significant we can perform a likelihood ratio test using $\chi^2$ distribution and obtain
+
+```{r}
+LRT <- 2 * (logLik(mod_zinb) - logLik(mod_zip3))
+ pchisq(LRT, df = 1, lower.tail = FALSE)
+```
+
+So the dispersion is in fact significant.
 
 **Bayesian zero inflated Poisson model**
 ```{r}
