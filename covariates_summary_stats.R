@@ -21,3 +21,6 @@ patients_events %>% group_by(cohort) %>%
 patients_events %>% group_by(cohort) %>% 
   summarize(mean(condition_count == 0)) %>% 
   kbl()
+
+
+ 
